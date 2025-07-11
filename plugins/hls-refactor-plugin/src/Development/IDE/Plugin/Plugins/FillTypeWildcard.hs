@@ -2,20 +2,41 @@ module Development.IDE.Plugin.Plugins.FillTypeWildcard
   ( suggestFillTypeWildcard
   ) where
 
+import           Control.Lens
 import           Data.Char
-import qualified Data.Text                   as T
-import           Language.LSP.Protocol.Types (Diagnostic (..),
-                                              TextEdit (TextEdit))
+import           Data.Maybe                        (isJust)
+import qualified Data.Text                         as T
+import           Development.IDE                   (FileDiagnostic (..),
+                                                    fdStructuredMessageL)
+import           Development.IDE.GHC.Compat.Error
+import           Development.IDE.Types.Diagnostics (_SomeStructuredMessage)
+import           Language.LSP.Protocol.Types       (Diagnostic (..),
+                                                    TextEdit (TextEdit))
 
-suggestFillTypeWildcard :: Diagnostic -> [(T.Text, TextEdit)]
-suggestFillTypeWildcard Diagnostic{_range=_range,..}
+suggestFillTypeWildcard :: FileDiagnostic -> [(T.Text, TextEdit)]
+suggestFillTypeWildcard diag@FileDiagnostic{fdLspDiagnostic = Diagnostic {..}}
 -- Foo.hs:3:8: error:
 --     * Found type wildcard `_' standing for `p -> p1 -> p'
-    | "Found type wildcard" `T.isInfixOf` _message
-    , " standing for " `T.isInfixOf` _message
+    | isWildcardDiagnostic diag
     , typeSignature <- extractWildCardTypeSignature _message
         =  [("Use type signature: ‘" <> typeSignature <> "’", TextEdit _range typeSignature)]
     | otherwise = []
+
+isWildcardDiagnostic :: FileDiagnostic -> Bool
+isWildcardDiagnostic = maybe False (isJust . (^? _TypeHole) . hole_sort) . typeHole
+    where
+        typeHole diag = do
+            (solverReport, _, _) <-
+                diag
+                    ^? fdStructuredMessageL
+                    . _SomeStructuredMessage
+                    . msgEnvelopeErrorL
+                    . _TcRnMessage
+                    . _TcRnSolverReport
+            (hole, _) <-  solverReport ^? reportContentL . _ReportHoleError
+
+            Just hole
+
 
 -- | Extract the type and surround it in parentheses except in obviously safe cases.
 --
